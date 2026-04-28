@@ -27,6 +27,13 @@ Your knowledge compounds.
 <a href="README.zh-CN.md"><img alt="简体中文" src="https://img.shields.io/badge/简体中文-README-111?style=flat-square" /></a>
 </p>
 
+<p>
+<strong>Language:</strong>
+<a href="README.md">English</a> ·
+<a href="README.zh-CN.md">简体中文</a> ·
+<a href="README-ko.md">한국어</a>
+</p>
+
 <br />
 
 <p>

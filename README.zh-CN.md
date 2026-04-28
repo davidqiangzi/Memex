@@ -19,6 +19,13 @@
 <a href="README-ko.md"><img alt="한국어" src="https://img.shields.io/badge/한국어-README-111?style=flat-square" /></a>
 </p>
 
+<p>
+<strong>语言：</strong>
+<a href="README.zh-CN.md">简体中文</a> ·
+<a href="README.md">English</a> ·
+<a href="README-ko.md">한국어</a>
+</p>
+
 <br />
 
 <p>
