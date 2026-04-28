@@ -129,6 +129,21 @@ def _safe_wiki_path(proj, filename: str) -> Path:
     return target
 
 
+def _safe_wiki_folder(proj, folder: str = "") -> Path:
+    target = _safe_wiki_path(proj, folder or ".")
+    if target.suffix:
+        raise ValueError(f"folder path must not be a file: {folder}")
+    return target
+
+
+def _is_git_repo() -> bool:
+    r = subprocess.run(
+        ["git", "rev-parse", "--is-inside-work-tree"],
+        cwd=str(REPO_ROOT), capture_output=True, text=True,
+    )
+    return r.returncode == 0 and r.stdout.strip() == "true"
+
+
 def _today() -> str:
     return datetime.now().strftime("%Y-%m-%d")
 
@@ -245,7 +260,10 @@ def list_pages(
         limit: Cap on number of pages returned (default 200).
     """
     proj = _resolve(project)
-    base = proj.wiki_dir / folder if folder else proj.wiki_dir
+    try:
+        base = _safe_wiki_folder(proj, folder)
+    except ValueError as e:
+        return {"project": proj.slug, "pages": [], "truncated": False, "error": str(e)}
     if not base.exists():
         return {"project": proj.slug, "pages": [], "truncated": False}
     items: list[dict] = []
@@ -481,7 +499,10 @@ def create_page(
     proj = _resolve(project)
     proj.wiki_dir.mkdir(parents=True, exist_ok=True)
     slug = project_registry.make_slug(title)
-    base = proj.wiki_dir / folder if folder else proj.wiki_dir
+    try:
+        base = _safe_wiki_folder(proj, folder)
+    except ValueError as e:
+        return {"ok": False, "error": str(e)}
     base.mkdir(parents=True, exist_ok=True)
     target = base / f"{slug}.md"
     n = 2
@@ -578,7 +599,7 @@ def git_commit(message: str, project: str = "") -> dict:
     proj = _resolve(project)
     cwd = str(REPO_ROOT)
 
-    if not (REPO_ROOT / ".git").is_dir():
+    if not _is_git_repo():
         return {"ok": False, "error": "repository is not a git repo"}
 
     if proj.is_legacy:

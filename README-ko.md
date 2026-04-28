@@ -23,6 +23,8 @@
 <img alt="Made with Claude Code" src="https://img.shields.io/badge/made%20with-Claude%20Code-111?style=flat-square" />
 &nbsp;
 <a href="README.md"><img alt="English" src="https://img.shields.io/badge/English-README-111?style=flat-square" /></a>
+&nbsp;
+<a href="README.zh-CN.md"><img alt="简体中文" src="https://img.shields.io/badge/简体中文-README-111?style=flat-square" /></a>
 </p>
 
 <br />

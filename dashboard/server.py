@@ -16,11 +16,27 @@ from pathlib import Path
 import project_registry
 from project_registry import REGISTRY_FILE
 
-PORT = 8090
+DEFAULT_HOST = "127.0.0.1"
+DEFAULT_PORT = 8090
 SCRIPT_DIR = Path(__file__).resolve().parent
 PROJECT_ROOT = SCRIPT_DIR.parent
 WIKI_DIR = PROJECT_ROOT / "wiki"
 RAW_DIR = PROJECT_ROOT / "raw"
+
+
+def _env_port() -> int:
+    raw = os.environ.get("MEMEX_PORT", str(DEFAULT_PORT)).strip()
+    try:
+        port = int(raw)
+    except ValueError as e:
+        raise ValueError(f"MEMEX_PORT must be an integer, got {raw!r}") from e
+    if not 1 <= port <= 65535:
+        raise ValueError(f"MEMEX_PORT must be between 1 and 65535, got {port}")
+    return port
+
+
+BIND_HOST = os.environ.get("MEMEX_HOST", DEFAULT_HOST).strip() or DEFAULT_HOST
+PORT = _env_port()
 
 # subprocess가 claude CLI를 찾을 수 있도록 PATH 보장
 _claude = shutil.which("claude")
@@ -89,6 +105,22 @@ def _resolve_project_body(body):
     return project_registry.get_project(slug)
 
 
+def _safe_wiki_path(proj, filename):
+    """wiki/ 하위 경로만 허용."""
+    base = proj.wiki_dir.resolve()
+    target = (proj.wiki_dir / (filename or "")).resolve()
+    if base != target and base not in target.parents:
+        raise ValueError(f"path escapes wiki/: {filename}")
+    return target
+
+
+def _safe_wiki_folder(proj, folder=""):
+    target = _safe_wiki_path(proj, folder or ".")
+    if target.suffix:
+        raise ValueError(f"folder path must not be a file: {folder}")
+    return target
+
+
 # ─── slug 생성 (한글/유니코드 지원) ───
 
 def make_slug(title):
@@ -137,9 +169,16 @@ def dedupe_raw_path(raw_path: Path) -> Path:
 def _snapshot_raw():
     """raw/ 파일 해시 스냅샷 (변경 감지용)"""
     snap = {}
-    for f in RAW_DIR.rglob("*"):
-        if f.is_file() and not f.name.startswith("."):
-            snap[str(f.relative_to(PROJECT_ROOT))] = f.stat().st_mtime
+    for raw_dir in project_registry.all_raw_dirs():
+        if not raw_dir.exists():
+            continue
+        for f in raw_dir.rglob("*"):
+            if f.is_file() and not f.name.startswith("."):
+                try:
+                    key = str(f.relative_to(PROJECT_ROOT))
+                except ValueError:
+                    key = str(f.resolve())
+                snap[key] = f.stat().st_mtime
     return snap
 
 
@@ -162,11 +201,17 @@ def check_raw_integrity():
 class GitManager:
     def __init__(self):
         self.root = str(PROJECT_ROOT)
-        # git repo가 아니면 초기화
-        if not (PROJECT_ROOT / ".git").is_dir():
+        if not self._is_git_repo():
             self._run("init")
             self._run("add", "-A")
             self._run("commit", "-m", "init: wiki bootstrap")
+
+    def _is_git_repo(self):
+        r = subprocess.run(
+            ["git", "rev-parse", "--is-inside-work-tree"],
+            capture_output=True, text=True, cwd=self.root,
+        )
+        return r.returncode == 0 and r.stdout.strip() == "true"
 
     def _run(self, *args):
         r = subprocess.run(
@@ -1153,7 +1198,10 @@ tags:
 def do_fix_citations(page_filename, project_slug=None):
     """특정 페이지의 citation을 Claude에게 보완시킴"""
     proj = project_registry.get_project(project_slug)
-    filepath = proj.wiki_dir / page_filename
+    try:
+        filepath = _safe_wiki_path(proj, page_filename)
+    except ValueError as e:
+        return {"ok": False, "error": str(e)}
     if not filepath.exists():
         return {"ok": False, "error": "Page not found"}
     prompt = f"""wiki/{page_filename}을 읽어.
@@ -1429,8 +1477,11 @@ def do_compare(page_a, page_b, save_as="", project_slug=None):
         return {"ok": False, "error": "Both pages required"}
     proj = project_registry.get_project(project_slug)
     wiki_dir = proj.wiki_dir
-    fa = wiki_dir / page_a
-    fb = wiki_dir / page_b
+    try:
+        fa = _safe_wiki_path(proj, page_a)
+        fb = _safe_wiki_path(proj, page_b)
+    except ValueError as e:
+        return {"ok": False, "error": str(e)}
     if not fa.exists() or not fb.exists():
         return {"ok": False, "error": "Page not found"}
 
@@ -1513,7 +1564,10 @@ def do_review_list(days=30, project_slug=None):
 
 def do_review_refresh(filename, project_slug=None):
     proj = project_registry.get_project(project_slug)
-    fp = proj.wiki_dir / filename
+    try:
+        fp = _safe_wiki_path(proj, filename)
+    except ValueError as e:
+        return {"ok": False, "error": str(e)}
     if not fp.exists():
         return {"ok": False, "error": "Page not found"}
     prompt = f"""wiki/{filename}를 읽고 다음을 수행해:
@@ -1534,7 +1588,10 @@ def do_review_refresh(filename, project_slug=None):
 
 def do_slides(page_filename, project_slug=None):
     proj = project_registry.get_project(project_slug)
-    fp = proj.wiki_dir / page_filename
+    try:
+        fp = _safe_wiki_path(proj, page_filename)
+    except ValueError as e:
+        return {"ok": False, "error": str(e)}
     if not fp.exists():
         return {"ok": False, "error": "Page not found"}
     content = fp.read_text("utf-8")
@@ -1810,8 +1867,14 @@ def delete_project_api(slug, confirm):
 def create_folder(name, parent="", project_slug=None):
     proj = project_registry.get_project(project_slug)
     proj.wiki_dir.mkdir(parents=True, exist_ok=True)
-    base = proj.wiki_dir / parent if parent else proj.wiki_dir
-    folder = base / name
+    try:
+        base = _safe_wiki_folder(proj, parent)
+        folder = (base / (name or "")).resolve()
+        wiki_base = proj.wiki_dir.resolve()
+        if wiki_base != folder and wiki_base not in folder.parents:
+            return {"ok": False, "error": f"path escapes wiki/: {name}"}
+    except ValueError as e:
+        return {"ok": False, "error": str(e)}
     folder.mkdir(parents=True, exist_ok=True)
     return {"ok": True, "project": proj.slug, "path": str(folder.relative_to(proj.wiki_dir))}
 
@@ -1823,7 +1886,10 @@ def create_page(title, page_type, folder="", content="", project_slug=None):
     wiki_dir = proj.wiki_dir
     wiki_dir.mkdir(parents=True, exist_ok=True)
     slug = make_slug(title)
-    base = wiki_dir / folder if folder else wiki_dir
+    try:
+        base = _safe_wiki_folder(proj, folder)
+    except ValueError as e:
+        return {"ok": False, "error": str(e)}
     base.mkdir(parents=True, exist_ok=True)
     filepath = base / f"{slug}.md"
     today = datetime.now().strftime("%Y-%m-%d")
@@ -1845,10 +1911,10 @@ tags: []
 
 def update_page(filename, content, project_slug=None):
     proj = project_registry.get_project(project_slug)
-    filepath = proj.wiki_dir / filename
     try:
+        filepath = _safe_wiki_path(proj, filename)
         assert_writable(filepath)
-    except PermissionError as e:
+    except (PermissionError, ValueError) as e:
         return {"ok": False, "error": str(e)}
     if not filepath.exists():
         return {"ok": False, "error": "Page not found"}
@@ -1858,10 +1924,10 @@ def update_page(filename, content, project_slug=None):
 
 def delete_page(filename, project_slug=None):
     proj = project_registry.get_project(project_slug)
-    filepath = proj.wiki_dir / filename
     try:
+        filepath = _safe_wiki_path(proj, filename)
         assert_writable(filepath)
-    except PermissionError as e:
+    except (PermissionError, ValueError) as e:
         return {"ok": False, "error": str(e)}
     if not filepath.exists():
         return {"ok": False, "error": "Page not found"}
@@ -2129,8 +2195,17 @@ class DualStackHTTPServer(HTTPServer):
         self.socket.setsockopt(socket.IPPROTO_IPV6, socket.IPV6_V6ONLY, 0)
         super().server_bind()
 
+
+def _server_class_for(host):
+    return DualStackHTTPServer if ":" in host else HTTPServer
+
+
 if __name__ == "__main__":
-    print(f"LLM Wiki Dashboard → http://localhost:{PORT}")
+    display_host = f"[{BIND_HOST}]" if ":" in BIND_HOST else BIND_HOST
+    print(f"LLM Wiki Dashboard → http://{display_host}:{PORT}")
+    print(f"Bind:    {BIND_HOST}:{PORT}")
+    if BIND_HOST in ("0.0.0.0", "::"):
+        print("WARNING: Dashboard is bound to a non-local address. Put it behind trusted network controls.")
     print(f"Project: {PROJECT_ROOT}")
     print(f"Wiki:    {WIKI_DIR} ({sum(1 for _ in WIKI_DIR.rglob('*.md'))} pages)")
-    DualStackHTTPServer(("::", PORT), Handler).serve_forever()
+    _server_class_for(BIND_HOST)((BIND_HOST, PORT), Handler).serve_forever()

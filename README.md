@@ -23,6 +23,8 @@ Your knowledge compounds.
 <img alt="Made with Claude Code" src="https://img.shields.io/badge/made%20with-Claude%20Code-111?style=flat-square" />
 &nbsp;
 <a href="README-ko.md"><img alt="한국어" src="https://img.shields.io/badge/한국어-README-111?style=flat-square" /></a>
+&nbsp;
+<a href="README.zh-CN.md"><img alt="简体中文" src="https://img.shields.io/badge/简体中文-README-111?style=flat-square" /></a>
 </p>
 
 <br />
@@ -82,7 +84,13 @@ cd memex
 python dashboard/server.py    # Python 3.10+, zero pip deps
 ```
 
-Open `http://localhost:8090`. Done.
+Open `http://localhost:8090`. The dashboard binds to `127.0.0.1:8090` by default.
+
+To choose a host or port:
+
+```bash
+MEMEX_HOST=127.0.0.1 MEMEX_PORT=8090 python dashboard/server.py
+```
 
 <br />
 
@@ -420,11 +428,28 @@ immediately visible across surfaces.
 ## Configuration
 
 ```bash
-# Environment variables
+# Dashboard bind settings
+MEMEX_HOST=127.0.0.1        # default: localhost-only
+MEMEX_PORT=8090             # default dashboard port
+
+# Claude CLI settings
 CLAUDE_TIMEOUT=1200  python dashboard/server.py   # 20-min timeout for large ingests
 CLAUDE_QUICK_TIMEOUT=30
 CLAUDE_TOOLS=Edit,Write,Read,Glob,Grep
 ```
+
+`MEMEX_HOST=0.0.0.0` or `MEMEX_HOST=::` is supported for explicit server deployments, but the dashboard has file mutation APIs and should not be exposed directly to the public internet. Keep it on `127.0.0.1` and put remote access behind a trusted network, reverse proxy, or VPN.
+
+**Local debugging checklist**
+
+```bash
+curl http://127.0.0.1:8090/api/status
+curl http://127.0.0.1:8090/api/projects
+curl http://127.0.0.1:8090/api/index/status
+curl http://127.0.0.1:8090/api/claude/diagnose
+```
+
+The dashboard itself has no pip dependencies. MCP is optional and uses its own `mcp-server/.venv` created by `bash mcp-server/install.sh`.
 
 **Per-project settings**
 - `projects/<slug>/.settings.json` — current project's model. Editable via the header model dropdown.
@@ -554,6 +579,29 @@ curl -X POST http://localhost:8090/api/ingest \
 **Legacy compatibility**
 
 If `projects.json` is missing or empty, the server runs in legacy mode — treating the root `wiki/ raw/ CLAUDE.md` as the default project. Existing setups keep working unchanged until you create your first project.
+
+---
+
+## Deployment notes
+
+Memex is designed to stay local-first. For a future VPS migration, run the dashboard bound to `127.0.0.1` and expose it only through a trusted layer such as Caddy/Nginx with authentication, Tailscale, WireGuard, or another private network. Do not expose the Python dashboard directly to the public internet.
+
+Minimum VPS runtime:
+
+- Python 3.10+
+- git, with the full repository history preserved
+- Node/npm only if installing Claude Code CLI on the VPS
+- Claude Code authenticated as the service user that runs the dashboard
+
+Back up or migrate these paths:
+
+- `.git/`
+- `wiki/`, `raw/`, `projects/`, `projects.json`
+- `ingest-reports/`, `reflect-reports/`
+- `CLAUDE.md`, templates, and per-project `CLAUDE.md` files
+- `.dashboard-settings.json`, `query-log.jsonl`, and project `.settings.json` files when present
+
+Search is currently lightweight TF-IDF over Markdown. If the wiki grows, the intended upgrade path is a rebuildable search index over `wiki/`: first SQLite FTS/BM25, then optional vector or hybrid search. The Markdown wiki remains the canonical knowledge layer; any vector database should be treated as a disposable index.
 
 ---
 
